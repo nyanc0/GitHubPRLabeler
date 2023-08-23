@@ -1,5 +1,6 @@
 ## PRLabeler
-PRにつけたラベルを任意のReviewrsがApproveしたときに変更できるyml.  
+PRにつけたラベルを任意のReviewrsがApproveしたときに変更できる、  
+GitHubActions用のyml.  
 shellで無理やり書いてます.  
 軽い動作確認のみなので動かなかったらごめんなさい.
 
