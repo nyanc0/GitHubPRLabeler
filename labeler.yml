@@ -1,0 +1,116 @@
+on: 
+  pull_request_review:
+    types: [submitted]
+name: Change Label Approved PullRequest
+jobs:
+  labelWhenApproved:
+    name: Label when approved
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v3
+        - name: Label when approved
+          run: |
+            set -e
+
+            if [[ -z "$GITHUB_TOKEN" ]]; then
+              echo "GITHUB_TOKEN をセットしてください"
+              exit 1
+            fi
+
+            if [[ -z "$GITHUB_REPOSITORY" ]]; then
+              echo "GITHUB_REPOSITORY をセットしてください"
+              exit 1
+            fi
+
+            if [[ -z "$GITHUB_EVENT_PATH" ]]; then
+              echo "GITHUB_EVENT_PATH をセットしてください"
+              exit 1
+            fi
+
+            if [[ -z "$DEFAULT_REVIEWRS_COUNT" ]]; then
+              echo "DEFAULT_REVIEWRS_COUNT をセットしてください"
+              exit 1
+            fi
+
+            if [[ -z "$ADD_LABEL" ]]; then
+              echo "ADD_LABEL をセットしてください"
+              exit 1
+            fi
+
+            URI="https://api.github.com"
+            API_HEADER="Accept: application/vnd.github.v3+json"
+            AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+            pullRequestNumber=$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH")
+
+            assigned_reviewrs_count() {
+              pullRequest=$(curl -sSL -H "${AUTH_HEADER}" -H "${API_HEADER}" "${URI}/repos/${GITHUB_REPOSITORY}/pulls/${pullRequestNumber}")
+              reviewrsCount=$(echo $pullRequest | jq -r '.requested_reviewers | length')
+              echo "$reviewrsCount"
+            }
+
+            approve_reviewrs_count() {
+              reviews=$(curl -sSL -H "${AUTH_HEADER}" -H "${API_HEADER}" "${URI}/repos/${GITHUB_REPOSITORY}/pulls/${pullRequestNumber}/reviews?per_page=100")
+              approvedReviewrs=()
+              length=$(echo $reviews | jq length)
+
+              for ((index=0; index<$length; index++)); do
+                review=$(echo $reviews | jq .[${index}])
+                userId=$(echo $review | jq -r .user.id)
+                reviewState=$(echo $review | jq -r .state)
+
+                if printf '%s\n' "${approvedReviewrs[@]}" | grep -qx $userId; then
+                  break
+                else
+                  if [ "$reviewState" == "APPROVED" ]; then
+                    approvedReviewrs+=($userId)
+                    break
+                  fi
+                fi
+              done
+              echo ${#approvedReviewrs[@]}
+            }
+
+            change_label() {
+              addLabel=$ADD_LABEL
+              currentLabels=$(curl -sSL \
+                -H "${AUTH_HEADER}" \
+                -H "${API_HEADER}" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"labels\":[\"${addLabel}\"]}" \
+                "${URI}/repos/${GITHUB_REPOSITORY}/issues/${pullRequestNumber}/labels")
+              currentLabelLength=$(echo $currentLabels | jq length)
+
+              removeLabel=$REMOVE_LABEL
+              # 日本語でラベル名を作成している場合、エンコードしないと失敗する.
+              # nkfが使えない環境を考えてjqでやってしまう.
+              encodedRemoveLabel=$(echo "$removeLabel" | jq -Rr @uri)
+
+              curl -sSL \
+                -H "${AUTH_HEADER}" \
+                -H "${API_HEADER}" \
+                -X DELETE \
+                "${URI}/repos/${GITHUB_REPOSITORY}/issues/${pullRequestNumber}/labels/${encodedRemoveLabel}"
+            }
+
+            requiredReviersCount=`assigned_reviewrs_count`
+            approveReviersCount=`approve_reviewrs_count`
+
+            echo "レビュアー人数：$requiredReviersCount"
+            echo "Approve人数：$approveReviersCount"
+
+            if [[ "$approveReviersCount" -ge "$DEFAULT_REVIEWRS_COUNT" ]] && [[ "$requiredReviersCount" -eq 0 ]]; then
+              echo "approveが$DEFAULT_REVIEWRS_COUNT人以上かつ全員approve済み"
+              change_label
+            elif [[ "$approveReviersCount" -ge 1 ]] && [[ "$requiredReviersCount" -eq 0 ]]; then
+              echo "approveが1人以上かつ全員approve済み"
+              change_label
+            else
+              echo "未レビュー者あり"
+            fi
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            DEFAULT_REVIEWRS_COUNT: 2
+            ADD_LABEL: "マージできるよ"
+            REMOVE_LABEL: "レビューして欲しいなぁ"
